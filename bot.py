@@ -28,6 +28,7 @@ async def ask_yandex_gpt(messages):
         "Content-Type": "application/json"
     }
     
+    # Формируем историю для Яндекса
     yandex_messages = [{"role": "system", "text": SYSTEM_PROMPT}]
     for msg in messages:
         yandex_messages.append({"role": msg["role"], "text": msg["content"]})
@@ -47,18 +48,19 @@ async def ask_yandex_gpt(messages):
                 logging.error(f"Yandex API Error: {await response.text()}")
                 return "Мяу... У меня заклинило мозги (ошибка API)."
 
-# --- ГЛАВНОЕ МЕНЮ (Inline, как на скриншоте) ---
+# --- ГЛАВНОЕ МЕНЮ ---
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     user = await get_user(message.from_user.id)
     
+    # Создаем меню с кнопками (Inline)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="ℹ️ Мой ID и лимит", callback_data="myid")],
         [InlineKeyboardButton(text="🧹 Очистить память", callback_data="rr")],
         [InlineKeyboardButton(text="🖼 Генерация картинок", callback_data="gen_info")]
     ])
 
-    if user[1] == 0:
+    if user[1] == 0: # Если не прошел капчу
         num1 = random.randint(1, 10)
         num2 = random.randint(1, 10)
         await state.update_data(captcha_answer=num1 + num2)
@@ -90,7 +92,7 @@ async def process_captcha(message: types.Message, state: FSMContext):
 # --- ОБЩЕНИЕ С AI ---
 @dp.message(BotStates.chatting, F.text)
 async def chat_handler(message: types.Message):
-    if message.text.startswith("/"): return # Игнорируем команды
+    if message.text.startswith("/"): return # Игнорируем команды в чате
 
     user_id = message.from_user.id
     user = await get_user(user_id)
@@ -100,6 +102,7 @@ async def chat_handler(message: types.Message):
         return
 
     await message.bot.send_chat_action(message.chat.id, "typing")
+    
     await add_history(user_id, "user", message.text)
     history = await get_history(user_id)
     
@@ -111,7 +114,7 @@ async def chat_handler(message: types.Message):
     
     await message.answer(ai_reply)
 
-# --- ОБРАБОТЧИКИ КНОПОК ---
+# --- ОБРАБОТЧИКИ КНОПОК МЕНЮ ---
 @dp.callback_query(F.data == "myid")
 async def btn_myid(callback: CallbackQuery):
     user = await get_user(callback.from_user.id)
@@ -129,10 +132,27 @@ async def btn_gen(callback: CallbackQuery):
     await callback.message.answer("Генерация картинок через YandexART находится в разработке. Скоро я научусь рисовать! 🎨")
     await callback.answer()
 
-# --- ТЕКСТОВЫЕ КОМАНДЫ ---
+# --- ТЕКСТОВЫЕ КОМАНДЫ (для меню) ---
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message):
-    await message.answer("Доступные команды:\n/start - начать\n/myid - ID и лимит\n/rr - очистить память\n/unlimit - сбросить лимиты (админ)")
+    text = (
+        "📜 **Список доступных команд:**\n\n"
+        "/start - Начать общение\n"
+        "/help - Показать это сообщение\n"
+        "/myid - Мой ID и остаток лимита\n"
+        "/rr - Очистить историю памяти\n"
+        "/prompts - Информация о текущем промпте\n"
+        "/support - Связаться с владельцем\n"
+    )
+    await message.answer(text, parse_mode="Markdown")
+
+@dp.message(Command("support"))
+async def cmd_support(message: types.Message):
+    await message.answer("Если у вас возникли вопросы, напишите владельцу бота: @Ваш_Юзернейм (замените в коде)")
+
+@dp.message(Command("prompts"))
+async def cmd_prompts(message: types.Message):
+    await message.answer("Сейчас я использую роль 'Кошкодевочка Мява'. В будущем здесь можно будет выбирать другие роли!")
 
 @dp.message(Command("rr"))
 async def cmd_rr(message: types.Message):
@@ -152,6 +172,11 @@ async def cmd_unlimit(message: types.Message):
     else:
         await message.answer("У тебя нет прав на эту команду.")
 
+@dp.message(Command("gen"))
+async def cmd_gen(message: types.Message):
+    await message.answer("Генерация картинок через YandexART находится в разработке.")
+
+# --- ЗАПУСК ---
 async def main():
     await init_db()
     print("Yandex Roleplay Bot запущен...")
