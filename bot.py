@@ -47,12 +47,11 @@ async def ask_yandex_gpt(messages):
                 logging.error(f"Yandex API Error: {await response.text()}")
                 return "Мяу... У меня заклинило мозги (ошибка API)."
 
-# --- ГЛАВНОЕ МЕНЮ ---
+# --- ГЛАВНОЕ МЕНЮ (Inline, как на скриншоте) ---
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     user = await get_user(message.from_user.id)
     
-    # Создаем меню с кнопками
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="ℹ️ Мой ID и лимит", callback_data="myid")],
         [InlineKeyboardButton(text="🧹 Очистить память", callback_data="rr")],
@@ -79,7 +78,6 @@ async def process_captcha(message: types.Message, state: FSMContext):
         await message.answer("Мява! Проверка пройдена. Теперь мы можем общаться~")
         await state.set_state(BotStates.chatting)
         
-        # Показываем меню после капчи
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="ℹ️ Мой ID и лимит", callback_data="myid")],
             [InlineKeyboardButton(text="🧹 Очистить память", callback_data="rr")],
@@ -92,8 +90,7 @@ async def process_captcha(message: types.Message, state: FSMContext):
 # --- ОБЩЕНИЕ С AI ---
 @dp.message(BotStates.chatting, F.text)
 async def chat_handler(message: types.Message):
-    # Игнорируем команды, чтобы они не улетали в ИИ
-    if message.text.startswith("/"): return
+    if message.text.startswith("/"): return # Игнорируем команды
 
     user_id = message.from_user.id
     user = await get_user(user_id)
@@ -103,7 +100,6 @@ async def chat_handler(message: types.Message):
         return
 
     await message.bot.send_chat_action(message.chat.id, "typing")
-    
     await add_history(user_id, "user", message.text)
     history = await get_history(user_id)
     
@@ -115,7 +111,7 @@ async def chat_handler(message: types.Message):
     
     await message.answer(ai_reply)
 
-# --- ОБРАБОТЧИКИ КНОПОК МЕНЮ ---
+# --- ОБРАБОТЧИКИ КНОПОК ---
 @dp.callback_query(F.data == "myid")
 async def btn_myid(callback: CallbackQuery):
     user = await get_user(callback.from_user.id)
@@ -133,7 +129,11 @@ async def btn_gen(callback: CallbackQuery):
     await callback.message.answer("Генерация картинок через YandexART находится в разработке. Скоро я научусь рисовать! 🎨")
     await callback.answer()
 
-# --- ТЕКСТОВЫЕ КОМАНДЫ (Дублируют кнопки) ---
+# --- ТЕКСТОВЫЕ КОМАНДЫ ---
+@dp.message(Command("help"))
+async def cmd_help(message: types.Message):
+    await message.answer("Доступные команды:\n/start - начать\n/myid - ID и лимит\n/rr - очистить память\n/unlimit - сбросить лимиты (админ)")
+
 @dp.message(Command("rr"))
 async def cmd_rr(message: types.Message):
     await clear_history(message.from_user.id)
