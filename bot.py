@@ -2,6 +2,7 @@ import asyncio
 import logging
 import random
 import aiohttp
+import base64
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
@@ -20,7 +21,7 @@ class BotStates(StatesGroup):
     waiting_for_captcha = State()
     chatting = State()
 
-# --- ФУНКЦИЯ ЗАПРОСА К YANDEXGPT ---
+# --- ЗАПРОС К YANDEXGPT ---
 async def ask_yandex_gpt(messages):
     url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
     headers = {
@@ -28,7 +29,6 @@ async def ask_yandex_gpt(messages):
         "Content-Type": "application/json"
     }
     
-    # Формируем историю для Яндекса
     yandex_messages = [{"role": "system", "text": SYSTEM_PROMPT}]
     for msg in messages:
         yandex_messages.append({"role": msg["role"], "text": msg["content"]})
@@ -45,22 +45,56 @@ async def ask_yandex_gpt(messages):
                 result = await response.json()
                 return result['result']['alternatives'][0]['message']['text']
             else:
-                logging.error(f"Yandex API Error: {await response.text()}")
+                logging.error(f"YandexGPT API Error: {await response.text()}")
                 return "Мяу... У меня заклинило мозги (ошибка API)."
+
+# --- ГЕНЕРАЦИЯ КАРТИНОК (YandexART) ---
+async def generate_image(prompt):
+    url = "https://llm.api.cloud.yandex.net/foundationModels/v1/imageGenerationAsync"
+    headers = {
+        "Authorization": f"Api-Key {YANDEX_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "modelUri": f"art://{YANDEX_FOLDER_ID}/yandex-art/latest",
+        "generationOptions": {"aspectRatio": {"widthRatio": "1", "heightRatio": "1"}},
+        "messages": [{"weight": "1", "text": prompt}]
+    }
+    
+    async with aiohttp.ClientSession() as session:
+        # Отправляем запрос на генерацию
+        async with session.post(url, headers=headers, json=payload) as response:
+            if response.status != 200:
+                logging.error(f"YandexART Error: {await response.text()}")
+                return None
+            result = await response.json()
+            operation_id = result.get('id')
+            
+        # Ждем завершения генерации (опрос статуса)
+        status_url = f"https://llm.api.cloud.yandex.net/operations/{operation_id}"
+        for _ in range(10): # Ждем максимум 10 секунд
+            await asyncio.sleep(1)
+            async with session.get(status_url, headers=headers) as resp:
+                status_data = await resp.json()
+                if status_data.get('done'):
+                    # Яндекс возвращает картинку в base64
+                    image_base64 = status_data['response']['image']
+                    return base64.b64decode(image_base64)
+                    
+    return None
 
 # --- ГЛАВНОЕ МЕНЮ ---
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     user = await get_user(message.from_user.id)
     
-    # Создаем меню с кнопками (Inline)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="ℹ️ Мой ID и лимит", callback_data="myid")],
         [InlineKeyboardButton(text="🧹 Очистить память", callback_data="rr")],
         [InlineKeyboardButton(text="🖼 Генерация картинок", callback_data="gen_info")]
     ])
 
-    if user[1] == 0: # Если не прошел капчу
+    if user[1] == 0:
         num1 = random.randint(1, 10)
         num2 = random.randint(1, 10)
         await state.update_data(captcha_answer=num1 + num2)
@@ -92,13 +126,13 @@ async def process_captcha(message: types.Message, state: FSMContext):
 # --- ОБЩЕНИЕ С AI ---
 @dp.message(BotStates.chatting, F.text)
 async def chat_handler(message: types.Message):
-    if message.text.startswith("/"): return # Игнорируем команды в чате
+    if message.text.startswith("/"): return
 
     user_id = message.from_user.id
     user = await get_user(user_id)
     
     if user[0] <= 0 and user_id != ADMIN_ID:
-        await message.answer("Мяу... У тебя закончились лимиты. Напиши /unlimit, чтобы сбросить (только для админа).")
+        await message.answer("Мяу... У тебя закончились лимиты.")
         return
 
     await message.bot.send_chat_action(message.chat.id, "typing")
@@ -114,6 +148,23 @@ async def chat_handler(message: types.Message):
     
     await message.answer(ai_reply)
 
+# --- ГЕНЕРАЦИЯ КАРТИНОК (Команда /gen) ---
+@dp.message(Command("gen"))
+async def cmd_gen(message: types.Message):
+    prompt = message.text.replace("/gen", "").strip()
+    if not prompt:
+        await message.answer("Напиши, что нарисовать: /gen кот в космосе")
+        return
+    
+    await message.answer("🎨 Мяу! Рисую... подожди немного.")
+    
+    image_bytes = await generate_image(prompt)
+    
+    if image_bytes:
+        await message.answer_photo(photo=types.BufferedInputFile(image_bytes, filename="art.jpg"), caption=f"Готово! Твой запрос: {prompt}")
+    else:
+        await message.answer("Ой, не смогла нарисовать. Попробуй другой запрос.")
+
 # --- ОБРАБОТЧИКИ КНОПОК МЕНЮ ---
 @dp.callback_query(F.data == "myid")
 async def btn_myid(callback: CallbackQuery):
@@ -124,15 +175,15 @@ async def btn_myid(callback: CallbackQuery):
 @dp.callback_query(F.data == "rr")
 async def btn_rr(callback: CallbackQuery):
     await clear_history(callback.from_user.id)
-    await callback.message.answer("Память очищена! Забыла всё, о чём мы говорили.")
+    await callback.message.answer("Память очищена!")
     await callback.answer()
 
 @dp.callback_query(F.data == "gen_info")
 async def btn_gen(callback: CallbackQuery):
-    await callback.message.answer("Генерация картинок через YandexART находится в разработке. Скоро я научусь рисовать! 🎨")
+    await callback.message.answer("Чтобы сгенерировать картинку, напиши: /gen твой запрос (например, /gen кот в космосе)")
     await callback.answer()
 
-# --- ТЕКСТОВЫЕ КОМАНДЫ (для меню) ---
+# --- ТЕКСТОВЫЕ КОМАНДЫ ---
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message):
     text = (
@@ -141,18 +192,14 @@ async def cmd_help(message: types.Message):
         "/help - Показать это сообщение\n"
         "/myid - Мой ID и остаток лимита\n"
         "/rr - Очистить историю памяти\n"
-        "/prompts - Информация о текущем промпте\n"
+        "/gen - Сгенерировать картинку\n"
         "/support - Связаться с владельцем\n"
     )
     await message.answer(text, parse_mode="Markdown")
 
 @dp.message(Command("support"))
 async def cmd_support(message: types.Message):
-    await message.answer("Если у вас возникли вопросы, напишите владельцу бота: @Ваш_Юзернейм (замените в коде)")
-
-@dp.message(Command("prompts"))
-async def cmd_prompts(message: types.Message):
-    await message.answer("Сейчас я использую роль 'Кошкодевочка Мява'. В будущем здесь можно будет выбирать другие роли!")
+    await message.answer("Вопросы? Пишите: @Ваш_Юзернейм")
 
 @dp.message(Command("rr"))
 async def cmd_rr(message: types.Message):
@@ -172,14 +219,9 @@ async def cmd_unlimit(message: types.Message):
     else:
         await message.answer("У тебя нет прав на эту команду.")
 
-@dp.message(Command("gen"))
-async def cmd_gen(message: types.Message):
-    await message.answer("Генерация картинок через YandexART находится в разработке.")
-
-# --- ЗАПУСК ---
 async def main():
     await init_db()
-    print("Yandex Roleplay Bot запущен...")
+    print("Yandex Roleplay Bot с ART запущен...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
